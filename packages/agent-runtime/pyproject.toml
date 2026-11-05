@@ -1,0 +1,15 @@
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[project]
+name = "open-repo-agent-runtime"
+version = "0.1.0"
+requires-python = ">=3.12"
+dependencies = ["open-repo-protocol", "openai-agents==0.20.0", "openai>=2.30,<3", "httpx==0.28.1"]
+
+[tool.uv.sources]
+open-repo-protocol = {path = "../protocol", editable = true}
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/agent_runtime"]

@@ -1,0 +1,14 @@
+.DS_Store
+.reference/
+__pycache__/
+*.pyc
+.venv/
+node_modules/
+.env
+.env.*
+!.env.example
+.data/
+.cache/
+.pytest_cache/
+*.egg-info/
+dist/

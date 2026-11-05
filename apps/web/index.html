@@ -1,0 +1,292 @@
+<!doctype html>
+<html lang="zh-CN">
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Mossail Agent</title>
+<style>
+  :root{color-scheme:light dark;font:16px/1.6 system-ui;--bg:light-dark(#fff,#181b20);--fg:light-dark(#202630,#e9edf2);--line:light-dark(#d4dae3,#46505e);--muted:light-dark(#f4f6f8,#242b34)}
+  body{margin:0;background:var(--bg);color:var(--fg)}main{max-width:850px;margin:30px auto;padding:0 20px}header{display:flex;align-items:center;gap:16px;flex-wrap:wrap}h1{font-size:24px}button,textarea,select{font:inherit;color:inherit;background:var(--bg);border:1px solid var(--line);border-radius:7px;padding:10px}button{cursor:pointer}button:disabled{opacity:.5;cursor:default}textarea{width:100%;box-sizing:border-box;resize:vertical}article{margin:18px 0;padding:15px;background:var(--muted);border-radius:8px;white-space:pre-wrap;overflow-wrap:anywhere}article[data-sender=user]{border-inline-start:3px solid var(--line)}article[data-status=error]{border-inline-start:3px solid #c85858}.toolbar{display:flex;gap:10px;margin:12px 0;align-items:center;flex-wrap:wrap}small{opacity:.75}.tool{font-size:14px}#status{min-height:1.6em}#notice{color:light-dark(#964b23,#edb28c)}#health{display:block}pre{white-space:pre-wrap}a{color:light-dark(#2855ad,#91b5fa)}
+</style>
+<main>
+  <header><h1>Mossail Agent</h1><button id="new" disabled>新会话</button><small>本机工作台</small></header>
+  <div id="status" role="status" aria-live="polite">正在连接…</div>
+  <small id="health"></small><div id="notice" role="alert"></div><button type="button" id="retry-save" hidden>重试保存</button>
+  <section id="messages" aria-label="会话消息"></section>
+  <form id="form"><label for="question">问题</label><textarea id="question" rows="3" required>请调用计算工具，计算 (17 + 25) * 3，并说明结果。</textarea>
+    <div class="toolbar"><label for="agent">场景</label><select id="agent"><option value="assistant">计算助手</option></select><button id="submit" disabled>发送</button><button type="button" id="stop" disabled>停止</button></div>
+  </form>
+</main>
+<script type="module">
+import {renderMessage} from '/assets/components.js';
+import {StreamState} from '/assets/stream-state.js';
+
+const $ = id => document.getElementById(id);
+const nodes = new Map();
+let threadId = localStorage.getItem('open-repo-thread');
+let state, socket, reconnectTimer, syncTimer, connectionSynced = false, syncRequested = false;
+let pending, pendingSentSocket, switching = false, creating = false, stoppingTask;
+let recordingTask, retrySaving = false;
+
+function savePending(value) {
+  pending = value;
+  if (value) sessionStorage.setItem('mossail-pending', JSON.stringify(value));
+  else sessionStorage.removeItem('mossail-pending');
+}
+
+function ready() { return socket?.readyState === WebSocket.OPEN && connectionSynced; }
+
+function updateControls() {
+  const active = state?.activeTask;
+  const busy = Boolean(active || pending);
+  $('submit').disabled = !ready() || busy || switching;
+  $('agent').disabled = busy || switching;
+  $('new').disabled = !state || switching;
+  $('stop').disabled = !ready() || !active || active.save_pending || stoppingTask === active.task_id;
+  $('retry-save').hidden = !recordingTask;
+  $('retry-save').disabled = retrySaving;
+  const status = active?.status || state?.latestTask?.status;
+  let text = {submitted: '任务已接收', running: '执行中', complete: '已完成', failed: '执行失败', abandon: '已停止'}[status];
+  if (pending && !active) text = '正在确认提交';
+  if (recordingTask) text = '执行已结束，等待保存';
+  if (!text) text = ready() ? '可以开始提问' : '正在连接…';
+  if (switching) text = creating ? '正在创建会话…'
+    : recordingTask ? '等待保存当前任务后新建会话…' : '正在停止当前任务，确认后新建会话…';
+  else if (stoppingTask && active) text = '正在停止…';
+  if (state && !ready()) text += socket?.readyState === WebSocket.OPEN ? ' · 正在同步' : ' · 正在恢复连接';
+  $('status').textContent = text;
+}
+
+function renderAll() {
+  const fragment = document.createDocumentFragment();
+  for (const [key, item] of state.orderedItems) {
+    let node = nodes.get(key);
+    if (!node) { node = document.createElement('article'); nodes.set(key, node); }
+    renderMessage(node, item, state.tasks.get(JSON.parse(key)[0])?.status);
+    fragment.append(node);
+  }
+  for (const key of nodes.keys()) if (!state.items.has(key)) nodes.delete(key);
+  $('messages').replaceChildren(fragment);
+}
+
+function send(frame) {
+  if (socket?.readyState !== WebSocket.OPEN) return false;
+  try { socket.send(JSON.stringify({protocol_version: 2, thread_id: threadId, ...frame})); return true; }
+  catch { socket.close(); return false; }
+}
+
+function requestSync() {
+  connectionSynced = false;
+  if (!syncRequested && send({type: 'sync_request'})) {
+    syncRequested = true;
+    clearTimeout(syncTimer);
+    const target = socket;
+    syncTimer = setTimeout(() => { if (socket === target && !connectionSynced) target.close(); }, 10000);
+  }
+  updateControls();
+}
+
+function sendPending() {
+  if (pending && ready() && pendingSentSocket !== socket) {
+    if (send(pending)) pendingSentSocket = socket;
+  }
+}
+
+function stopCurrent() {
+  const active = state?.activeTask;
+  if (active && !active.save_pending && ready() && send({type: 'stop', task_id: active.task_id})) stoppingTask = active.task_id;
+  updateControls();
+}
+
+async function createThread() {
+  const response = await fetch('/threads', {method: 'POST'});
+  if (!response.ok) throw new Error('无法创建会话，请检查服务状态');
+  const value = await response.json();
+  if (typeof value.thread_id !== 'string' || !value.thread_id) throw new Error('服务返回的会话信息无效');
+  return value.thread_id;
+}
+
+async function switchIfStopped() {
+  if (!switching || creating || state.activeTask || pending || !ready()) return;
+  creating = true;
+  updateControls();
+  try {
+    const nextThread = await createThread();
+    const previous = socket;
+    socket = null;
+    previous?.close();
+    clearTimeout(reconnectTimer);
+    clearTimeout(syncTimer);
+    threadId = nextThread;
+    localStorage.setItem('open-repo-thread', threadId);
+    state = new StreamState(threadId);
+    stoppingTask = null;
+    recordingTask = null;
+    $('notice').textContent = '';
+    nodes.clear();
+    $('messages').replaceChildren();
+    connect();
+  } catch (error) { $('notice').textContent = error.message; }
+  finally { switching = false; creating = false; updateControls(); }
+}
+
+function handleFrame(frame) {
+  if (frame.thread_id && frame.thread_id !== threadId) return;
+  if (frame.type === 'heads') {
+    if (state.consume(frame).kind === 'resync') requestSync();
+    return;
+  }
+  if (frame.type === 'sync' || frame.event_v2) {
+    if (frame.event_v2 && !connectionSynced) { requestSync(); return; }
+    const result = state.consume(frame);
+    if (result.kind === 'resync') { requestSync(); return; }
+    if (result.kind === 'ignore') return;
+    if (result.kind === 'sync') {
+      connectionSynced = true;
+      syncRequested = false;
+      clearTimeout(syncTimer);
+      if (pending && [...state.tasks.values()].some(task => task.client_request_id === pending.client_request_id)) savePending(null);
+      const previousRecordingTask = recordingTask;
+      recordingTask = [...state.tasks.values()].find(task => task.save_pending)?.task_id;
+      if (recordingTask) $('notice').textContent = '执行已结束，但终态尚未保存；请重试保存';
+      else if (previousRecordingTask) $('notice').textContent = '';
+      if (result.recoveredCheckpoint) $('notice').textContent = 'INTERRUPTED：服务重启，已恢复到保存检查点；请重新提交。';
+      if (!state.activeTask) stoppingTask = null;
+    }
+    renderAll();
+    sendPending();
+  } else if (frame.type === 'task_accepted') {
+    if (!state.acceptTask(frame)) return;
+    if (pending && frame.client_request_id === pending.client_request_id) savePending(null);
+  } else if (frame.type === 'cancel_result') {
+    stoppingTask = null;
+    if (frame.message) $('notice').textContent = frame.message;
+    requestSync();
+  } else if (frame.type === 'error' || frame.type === 'recording_error') {
+    $('notice').textContent = frame.message || '任务记录暂不可用，正在重新同步';
+    if (frame.client_request_id && frame.client_request_id === pending?.client_request_id) savePending(null);
+    if (frame.type === 'recording_error') recordingTask = frame.task_id;
+    // 控制错误不代表执行协程停止，任务状态只接受同步或有序更新。
+    stoppingTask = null;
+    requestSync();
+  } else return;
+  if (stoppingTask && !state.activeTask) stoppingTask = null;
+  if (recordingTask && ['complete', 'failed', 'abandon'].includes(state.tasks.get(recordingTask)?.status)) {
+    recordingTask = null;
+    $('notice').textContent = '';
+  }
+  if (switching && state.activeTask && !stoppingTask) stopCurrent();
+  updateControls();
+  void switchIfStopped();
+}
+
+function connect() {
+  clearTimeout(reconnectTimer);
+  clearTimeout(syncTimer);
+  connectionSynced = false;
+  syncRequested = false;
+  pendingSentSocket = null;
+  const connectedThread = threadId;
+  const current = new WebSocket((location.protocol === 'https:' ? 'wss://' : 'ws://') + location.host + '/ws/chat/');
+  socket = current;
+  state.beginConnection();
+  const isCurrent = () => socket === current && threadId === connectedThread;
+  current.onopen = () => {
+    if (!isCurrent()) return;
+    send({type: 'reconnect'});
+    syncRequested = true;
+    syncTimer = setTimeout(() => { if (isCurrent() && !connectionSynced) current.close(); }, 10000);
+    updateControls();
+  };
+  current.onmessage = event => {
+    if (!isCurrent()) return;
+    try { handleFrame(JSON.parse(event.data)); }
+    catch { $('notice').textContent = '消息处理失败，正在重新同步'; requestSync(); }
+  };
+  current.onclose = () => {
+    if (!isCurrent()) return;
+    clearTimeout(syncTimer);
+    connectionSynced = false;
+    stoppingTask = null;
+    updateControls();
+    reconnectTimer = setTimeout(connect, 1000);
+  };
+  current.onerror = () => { if (isCurrent()) current.close(); };
+  updateControls();
+}
+
+async function loadHealth() {
+  try {
+    const response = await fetch('/health');
+    if (!response.ok) throw new Error();
+    const health = await response.json();
+    if (!health.agent?.model_configured) $('health').textContent = '模型尚未配置，请检查启动终端。';
+    if (health.agent?.agents?.includes('deep_search')) {
+      const option = document.createElement('option');
+      option.value = 'deep_search'; option.textContent = 'DeepSearch 网页检索';
+      $('agent').append(option);
+      if (!pending) $('agent').value = 'deep_search';
+    }
+  } catch { $('health').textContent = '暂时无法读取服务状态。'; }
+}
+
+async function initialize() {
+  if (threadId) {
+    const response = await fetch('/threads/' + encodeURIComponent(threadId) + '/history');
+    if (response.status === 404) threadId = null;
+    else if (!response.ok) throw new Error('会话记录暂不可用，请检查服务后刷新');
+  }
+  if (!threadId) {
+    threadId = await createThread();
+    localStorage.setItem('open-repo-thread', threadId);
+  }
+  state = new StreamState(threadId);
+  try {
+    const saved = JSON.parse(sessionStorage.getItem('mossail-pending') || 'null');
+    if (saved?.thread_id === threadId && saved.client_request_id && typeof saved.question === 'string') {
+      pending = saved;
+      $('question').value = saved.question;
+    } else savePending(null);
+  } catch { savePending(null); }
+  connect();
+  void loadHealth();
+}
+
+$('form').onsubmit = event => {
+  event.preventDefault();
+  if (!ready() || state.activeTask || pending || switching) return;
+  const question = $('question').value.trim();
+  if (!question) return;
+  $('notice').textContent = '';
+  savePending({type: 'chat', protocol_version: 2, thread_id: threadId,
+    client_request_id: crypto.randomUUID(), agent: $('agent').value, question});
+  pendingSentSocket = null;
+  sendPending();
+  updateControls();
+};
+$('stop').onclick = stopCurrent;
+$('retry-save').onclick = async () => {
+  if (!recordingTask || retrySaving) return;
+  const savedThread = threadId, taskId = recordingTask;
+  retrySaving = true;
+  updateControls();
+  try {
+    const response = await fetch('/tasks/' + encodeURIComponent(taskId) + '/retry-save', {method: 'POST'});
+    if (savedThread !== threadId) return;
+    $('notice').textContent = response.ok ? '正在确认保存结果…' : '保存仍未成功，请稍后重试保存';
+    requestSync();
+  } catch {
+    if (savedThread === threadId) $('notice').textContent = '保存请求未完成，请检查连接后重试保存';
+  } finally { retrySaving = false; updateControls(); }
+};
+$('new').onclick = () => {
+  if (!state || switching) return;
+  switching = true;
+  $('notice').textContent = '';
+  if (state.activeTask) stopCurrent();
+  else if (pending) requestSync();
+  updateControls();
+  void switchIfStopped();
+};
+initialize().catch(error => { $('status').textContent = error.message || 'Agent 服务不可用，请检查启动终端'; });
+</script>
+</html>
