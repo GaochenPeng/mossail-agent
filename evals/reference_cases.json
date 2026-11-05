@@ -1,0 +1,34 @@
+{
+  "version": 1,
+  "purpose": "最小运行回归；四个合成问题，不用于推断开放域质量或RSI收益",
+  "cases": [
+    {
+      "id": "calculator-history",
+      "agent": "assistant",
+      "tags": ["arithmetic", "multi_turn"],
+      "reference": {"basis": "固定算术表达式及上一轮结果，可直接独立计算"},
+      "steps": [
+        {"question": "请调用工具计算 (17 + 25) * 3，用中文说明结果。", "expect": {"tool_names": ["calculate"], "tool_number": "126", "answer_patterns": ["126"]}},
+        {"question": "请把上一轮计算的结果除以3，必须调用工具并说明结果。", "expect": {"tool_names": ["calculate"], "tool_number": "42", "answer_patterns": ["42"]}}
+      ]
+    },
+    {
+      "id": "pep-654",
+      "agent": "deep_search",
+      "tags": ["web_research", "primary_source", "citations"],
+      "reference": {"url": "https://peps.python.org/pep-0654/", "locator": "Python-Version、Abstract", "checked_on": "2026-11-03"},
+      "steps": [
+        {"question": "请检索并阅读 Python 官方 PEP 654，回答它引入哪两项主要机制、对应的 Python 版本，附引用。", "expect": {"tool_names": ["web_search", "content_fetch"], "answer_patterns": ["3\\.11", "ExceptionGroup", "except\\*"], "source_url": "https://peps.python.org/pep-0654/", "evidence_patterns": ["3\\.11", "ExceptionGroup", "except\\*"]}}
+      ]
+    },
+    {
+      "id": "pep-695",
+      "agent": "deep_search",
+      "tags": ["web_research", "primary_source", "citations"],
+      "reference": {"url": "https://peps.python.org/pep-0695/", "locator": "Python-Version、Abstract、Summary Examples", "checked_on": "2026-11-03"},
+      "steps": [
+        {"question": "请检索并阅读 Python 官方 PEP 695，简要说明它对类型参数语法和类型别名声明做了什么改进，以及对应的 Python 版本，附引用。", "expect": {"tool_names": ["web_search", "content_fetch"], "answer_patterns": ["3\\.12", "type", "类型参数"], "source_url": "https://peps.python.org/pep-0695/", "evidence_patterns": ["3\\.12", "type", "type parameter"]}}
+      ]
+    }
+  ]
+}

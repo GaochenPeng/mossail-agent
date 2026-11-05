@@ -1,6 +1,6 @@
 # 参与开发
 
-Mossail当前发布范围是薄Agent Server、PG/Redis适配、Agent Harness、协议和Web前端。本机运行方式见[README](README.md)，消息链路与验证范围见[首版说明](docs/acceptance/mossail-local-v1.md)。
+Mossail当前发布范围是薄Agent Server、PG/Redis适配、Agent Harness、协议、Web前端，以及案例/RSI材料冻结与评审工具；新RSI隔离执行仍延期。本机运行方式见[README](README.md)，消息链路与验证范围见[首版说明](docs/acceptance/mossail-local-v1.md)。
 
 ## 代码风格
 
@@ -50,4 +50,4 @@ DeepSearch可规范化来源ID的引用括号，但仍须校验来源已登记�
 
 不要提交`.env`、`.env.local`、OAuth凭证、访问令牌、`.data`运行数据、内部参考或个人配置；`.env.example`只保留配置名称和占位值。提交前查看变更清单和内容。
 
-本地旧工作区可能保留Backend、SQLite、RSI实验和教学档案；不要把这些历史依赖引入当前发布路径。原始验收记录可留在本机，公开说明只包含可核对的工程入口、技术机制、验证范围与限制。
+旧SQLite Backend及双服务启动入口已移除。案例与RSI纯逻辑测试放在`tests/rsi`；新隔离执行器验收前，`evaluate/run`必须明确拒绝执行，不复用开发PG/Redis。历史实验、教学档案及原始验收记录可留在本机，不重新引入旧运行依赖；公开说明只包含可核对的工程入口、技术机制、验证范围与限制。

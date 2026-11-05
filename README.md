@@ -89,10 +89,12 @@ node --test tests/web/*.test.mjs
 
 前端工程检查在Node 22环境验证。
 
-当前未验收应用容器、多Worker、跨实例执行恢复、DAG、第二SDK与复杂HITL；代码RSI保留为后续独立接入方向。旧Backend和根应用compose未适配此版，不属于本轮运行或发布路径。
+当前未验收应用容器、多Worker、跨实例执行恢复、DAG、第二SDK与复杂HITL。旧SQLite Backend、双服务容器配置及旧验收入口已移除；当前只使用上述薄Agent Server启动路径。
+
+代码RSI保留案例材料校验、实验冻结、本地候选和维护者评审；`evaluate/run`在读取模型配置或启动服务之前明确拒绝执行。独立PG schema、Redis namespace及候选进程隔离尚待适配，不复用开发数据或将历史双服务结果当作当前验收，见[RSI状态](rsi/README.md)。
 
 ## 本地资料与发布范围
 
-本次发布包含Agent服务、Web前端、Harness/协议、对应测试、启动脚本和本机说明。本地工作区可能还保留历史Backend、RSI实验、教学材料、内部参考和原始验收记录，它们不属于本次公开发布内容。私人配置、认证凭证和运行数据不入库。
+本次发布包含Agent服务、Web前端、Harness/协议、对应测试、启动脚本、本机说明，以及案例/RSI材料冻结与评审工具；RSI隔离执行仍未适配。本地工作区还保留历史实验、教学材料、内部参考和原始验收记录，它们不属于本次公开发布内容。私人配置、认证凭证和运行数据不入库。
 
 开发风格、模块边界和提交范围见[CONTRIBUTING](CONTRIBUTING.md)。

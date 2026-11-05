@@ -1,0 +1,22 @@
+{
+  "id": "deepsearch-url-robustness",
+  "planning": {"mode": "local_manual", "producer": "current_codex_prepared_template"},
+  "objective": "修复 DeepSearch 网页来源登记的输入健壮性：检索供应商返回畸形 URL 时应忽略该条而不是中断整个研究任务；保留现有公开 URL、引用 ID、私网及凭证 URL 拒绝规则。只改执行代码，不改测试或验收标准。",
+  "allowed_files": ["packages/agent-runtime/src/agent_runtime/research.py"],
+  "change_scope": {
+    "unit": "python_symbol",
+    "symbols": {"packages/agent-runtime/src/agent_runtime/research.py": ["public_url"]},
+    "preserve_signatures": true
+  },
+  "development_note": "公开 URL 合法性判断目前直接解析供应商链接。请检查解析、hostname 和端口访问可能出现的 ValueError；用最小代码修正，不添加供应商 fallback。",
+  "target_check": "rsi/checks/url_guard.py",
+  "target_expected_checks": ["malformed-0", "malformed-1", "malformed-2", "malformed-3", "valid_public", "private_denied", "credentials_denied", "mixed_search_flow"],
+  "business_suite": "evals/reference_cases.json",
+  "policy": {
+    "require_existing_regressions": true,
+    "require_target_failure_on_baseline": true,
+    "require_target_success_on_candidate": true,
+    "require_live_business_success": true,
+    "merge": "maintainer_only"
+  }
+}
